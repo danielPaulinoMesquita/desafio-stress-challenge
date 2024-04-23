@@ -13,7 +13,7 @@ type Report struct {
 	TotalTime          time.Duration
 	TotalRequests      int
 	SuccessfulRequests int
-	StatusDistribution map[int]int
+	StatusDistribution int
 }
 
 func runReportCmd(cmd *cobra.Command, args []string) {
@@ -27,12 +27,7 @@ func runReportCmd(cmd *cobra.Command, args []string) {
 	fmt.Printf("Tempo total gasto: %s\n", report.TotalTime)
 	fmt.Printf("Quantidade total de requests: %d\n", report.TotalRequests)
 	fmt.Printf("Quantidade de requests com status HTTP 200: %d\n", report.SuccessfulRequests)
-	fmt.Printf("Distribuição de outros códigos de status HTTP:\n")
-	for statusCode, count := range report.StatusDistribution {
-		if statusCode != http.StatusOK {
-			fmt.Printf("Status %d: %d\n", statusCode, count)
-		}
-	}
+	fmt.Printf("Distribuição de outros códigos de status HTTP: %d\n", report.StatusDistribution)
 }
 
 func runBenchmark(url string, totalRequests, concurrencyLevel int) Report {
@@ -42,7 +37,9 @@ func runBenchmark(url string, totalRequests, concurrencyLevel int) Report {
 	semaphore := make(chan struct{}, concurrencyLevel)
 
 	startTime := time.Now()
-	statusDistribution := make(map[int]int)
+
+	var mu sync.Mutex
+	statusDistribution := 0
 
 	for i := 0; i < totalRequests; i++ {
 		semaphore <- struct{}{}
@@ -52,12 +49,19 @@ func runBenchmark(url string, totalRequests, concurrencyLevel int) Report {
 			resp, err := http.Get(url)
 			if err != nil {
 				fmt.Printf("Erro ao realizar request para %s: %s\n", url, err.Error())
+				mu.Lock()
+				statusDistribution++
+				mu.Unlock()
 				return
 			}
 			defer resp.Body.Close()
 
 			statusCode := resp.StatusCode
-			statusDistribution[statusCode]++
+			if statusCode < 200 || statusCode >= 300 {
+				mu.Lock()
+				statusDistribution++
+				mu.Unlock()
+			}
 
 			fmt.Printf("Request para %s concluído com status %s\n", url, resp.Status)
 
@@ -68,7 +72,8 @@ func runBenchmark(url string, totalRequests, concurrencyLevel int) Report {
 	wg.Wait()
 
 	totalTime := time.Since(startTime)
-	successfulRequests := totalRequests - statusDistribution[http.StatusInternalServerError]
+
+	successfulRequests := totalRequests - statusDistribution
 
 	return Report{
 		TotalTime:          totalTime,
